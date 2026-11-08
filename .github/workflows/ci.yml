@@ -1,0 +1,34 @@
+ name: RaceDay CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  api-test-and-mvc-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Validate submission structure
+        run: |
+          test -f README.md
+          test -d docs
+          test -f RaceDay.Mvc/Dockerfile
+          test -f RaceDay.Api/Services/BlobStorageService.cs
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Restore projects
+        run: |
+          dotnet restore RaceDay.Tests/RaceDay.Tests.csproj
+          dotnet restore RaceDay.Mvc/RaceDay.Mvc.csproj
+      - name: Build API and test project
+        run: dotnet build RaceDay.Tests/RaceDay.Tests.csproj --no-restore -c Release
+      - name: Run API tests
+        run: dotnet test RaceDay.Tests/RaceDay.Tests.csproj --no-build -c Release --verbosity normal
+      - name: Build MVC frontend
+        run: dotnet build RaceDay.Mvc/RaceDay.Mvc.csproj --no-restore -c Release
+      - name: Build MVC container
+        run: docker build -f RaceDay.Mvc/Dockerfile -t raceday-mvc:ci .
