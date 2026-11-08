@@ -4,31 +4,106 @@ on:
   push:
   pull_request:
 
+# Cancel an older run of the same branch when a new commit is pushed
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
 jobs:
-  api-test-and-mvc-build:
+  validate-submission:
+    name: Validate submission structure
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Validate submission structure
+
+      - name: Check required files
         run: |
           test -f README.md
           test -d docs
           test -f RaceDay.Mvc/Dockerfile
           test -f RaceDay.Api/Services/BlobStorageService.cs
+
+      - name: Warn if the video link is still a placeholder
+        run: |
+          if grep -q "ADD YOUR VIDEO LINK HERE" README.md; then
+            echo "::warning file=README.md::YouTube video link is still a placeholder."
+          fi
+
+  api-tests:
+    name: API unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
-      - name: Restore projects
-        run: |
-          dotnet restore RaceDay.Tests/RaceDay.Tests.csproj
-          dotnet restore RaceDay.Mvc/RaceDay.Mvc.csproj
-      - name: Build API and test project
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Restore
+        run: dotnet restore RaceDay.Tests/RaceDay.Tests.csproj
+
+      - name: Build API and tests
         run: dotnet build RaceDay.Tests/RaceDay.Tests.csproj --no-restore -c Release
-      - name: Run API tests
-        run: dotnet test RaceDay.Tests/RaceDay.Tests.csproj --no-build -c Release --verbosity normal
-      - name: Build MVC frontend
+
+      - name: Run tests
+        run: >
+          dotnet test RaceDay.Tests/RaceDay.Tests.csproj
+          --no-build -c Release --verbosity normal
+          --logger "trx;LogFileName=test-results.trx"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: "**/test-results.trx"
+
+  mvc-build:
+    name: Build MVC frontend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Restore
+        run: dotnet restore RaceDay.Mvc/RaceDay.Mvc.csproj
+
+      - name: Build
         run: dotnet build RaceDay.Mvc/RaceDay.Mvc.csproj --no-restore -c Release
-      - name: Build MVC container
+
+  docker-build:
+    name: Build MVC Docker image
+    runs-on: ubuntu-latest
+    needs: [api-tests, mvc-build]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image
         run: docker build -f RaceDay.Mvc/Dockerfile -t raceday-mvc:ci .
